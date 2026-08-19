@@ -6,4 +6,7 @@ func CanCancel(state State) bool {
 func CanRetry(state State) bool {
 	return state == StateDead || state == StateRunning || state == StatePending
 }
-func IsQueueVisible(state State) bool { return state != StateCancelled }
+
+func (j Job) Retryable() bool {
+	return !j.IsTerminal() && j.Attempts < j.MaxAttempts
+}

@@ -280,6 +280,10 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "job is running")
 		return
 	}
+	if !model.CanRetry(j.State) {
+		writeError(w, http.StatusConflict, "job cannot be retried from state "+string(j.State))
+		return
+	}
 	j.State = model.StatePending
 	j.RunAt = time.Now()
 	j.LastError = ""
@@ -295,6 +299,10 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	j, err := s.store.GetJob(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if !model.CanCancel(j.State) {
+		writeError(w, http.StatusConflict, "job cannot be cancelled from state "+string(j.State))
 		return
 	}
 	if j.State == model.StateRunning {

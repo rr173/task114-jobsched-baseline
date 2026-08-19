@@ -176,7 +176,8 @@ func (p *Pool) nextRun(j *model.Job) (time.Time, bool) {
 	if j.Attempts+1 >= j.MaxAttempts {
 		return time.Time{}, false
 	}
-	return p.clk.Now().Add(p.strategy.Next(j.Attempts, p.backoff)), true
+	delay := backoff.Window(p.strategy, j.Attempts, p.backoff, p.backoff*16)
+	return p.clk.Now().Add(delay), true
 }
 
 // SetBackoffStrategy overrides the retry backoff computation.
@@ -216,19 +217,31 @@ func (p *Pool) fireDueSchedules(ctx context.Context) {
 			return
 		default:
 		}
-		j := &model.Job{
-			ID:          fmt.Sprintf("sched-%s-%d", sc.ID, p.clk.Now().UnixNano()),
-			Queue:       sc.Queue,
-			Type:        sc.Type,
-			Args:        sc.Args,
-			State:       model.StatePending,
-			RunAt:       p.clk.Now(),
-			MaxAttempts: sc.MaxAttempts,
-			Priority:    sc.Priority,
+		runs := sc.MissedRuns(p.clk.Now())
+		if runs < 1 {
+			runs = 1
 		}
-		if err := p.store.CreateJob(j); err == nil {
+		if runs > 10 {
+			runs = 10
+		}
+		runAt := sc.NextRun(p.clk.Now())
+		for i := 0; i < runs; i++ {
+			j := &model.Job{
+				ID:          fmt.Sprintf("sched-%s-%d", sc.ID, runAt.UnixNano()),
+				Queue:       sc.Queue,
+				Type:        sc.Type,
+				Args:        sc.Args,
+				State:       model.StatePending,
+				RunAt:       runAt,
+				MaxAttempts: sc.MaxAttempts,
+				Priority:    sc.Priority,
+			}
+			if err := p.store.CreateJob(j); err != nil {
+				break
+			}
 			p.metrics.IncEnqueued()
-			_ = p.store.TouchSchedule(sc.ID, p.clk.Now())
+			_ = p.store.TouchSchedule(sc.ID, runAt)
+			runAt = runAt.Add(sc.Interval)
 		}
 	}
 }
