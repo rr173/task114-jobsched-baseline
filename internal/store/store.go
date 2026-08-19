@@ -600,6 +600,54 @@ func (s *Store) TouchSchedule(id string, now time.Time) error {
 	return nil
 }
 
+// EnqueueScheduleRun persists a generated occurrence and advances the
+// schedule cursor in one transaction. An existing occurrence is treated as
+// already delivered, so a retry cannot leave the cursor stuck behind it.
+func (s *Store) EnqueueScheduleRun(scheduleID string, j *model.Job, runAt time.Time) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin schedule run: %w", err)
+	}
+	defer tx.Rollback()
+	now := time.Now()
+	if j.CreatedAt.IsZero() {
+		j.CreatedAt = now
+	}
+	j.UpdatedAt = now
+	if j.MaxAttempts < 1 {
+		j.MaxAttempts = 1
+	}
+	res, err := tx.Exec(
+		`INSERT INTO jobs(id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+		j.ID, j.Queue, j.Type, j.Args, string(j.State), j.RunAt.UnixNano(),
+		j.CreatedAt.UnixNano(), j.UpdatedAt.UnixNano(), j.Attempts, j.MaxAttempts,
+		j.LastError, j.Result, j.Priority,
+	)
+	if err != nil {
+		return false, fmt.Errorf("insert schedule run: %w", err)
+	}
+	created, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("schedule run rows: %w", err)
+	}
+	updated, err := tx.Exec(`UPDATE schedules SET last_run=? WHERE id=? AND enabled=1`, runAt.UnixNano(), scheduleID)
+	if err != nil {
+		return false, fmt.Errorf("advance schedule: %w", err)
+	}
+	n, err := updated.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("advance schedule rows: %w", err)
+	}
+	if n == 0 {
+		return false, ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit schedule run: %w", err)
+	}
+	return created > 0, nil
+}
+
 // DueSchedules returns schedules whose next fire time is at or before now.
 func (s *Store) DueSchedules(now time.Time) ([]model.Schedule, error) {
 	rows, err := s.db.Query(

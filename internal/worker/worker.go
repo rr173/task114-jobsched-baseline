@@ -236,11 +236,13 @@ func (p *Pool) fireDueSchedules(ctx context.Context) {
 				MaxAttempts: sc.MaxAttempts,
 				Priority:    sc.Priority,
 			}
-			if err := p.store.CreateJob(j); err != nil {
+			created, err := p.store.EnqueueScheduleRun(sc.ID, j, runAt)
+			if err != nil {
 				break
 			}
-			p.metrics.IncEnqueued()
-			_ = p.store.TouchSchedule(sc.ID, runAt)
+			if created {
+				p.metrics.IncEnqueued()
+			}
 			runAt = runAt.Add(sc.Interval)
 		}
 	}
