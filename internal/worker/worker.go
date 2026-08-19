@@ -106,6 +106,9 @@ func (p *Pool) Flush(ctx context.Context) error {
 			p.mu.Lock()
 			delete(p.active, j.ID)
 			p.mu.Unlock()
+			if err := p.store.ReleaseClaim(j.ID); err != nil {
+				return err
+			}
 			return ctx.Err()
 		}
 		p.wg.Add(1)

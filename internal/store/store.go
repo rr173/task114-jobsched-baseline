@@ -235,6 +235,27 @@ func (s *Store) Claim(id string) (bool, error) {
 	return n > 0, nil
 }
 
+// ReleaseClaim returns a claimed job to the pending pool when dispatch could
+// not start its handler, for example because the caller's context was
+// cancelled while waiting for worker capacity.
+func (s *Store) ReleaseClaim(id string) error {
+	res, err := s.db.Exec(
+		`UPDATE jobs SET state='pending', run_at=?, updated_at=? WHERE id=? AND state='running'`,
+		time.Now().UnixNano(), time.Now().UnixNano(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("release claim: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("release claim rows: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Succeed marks a job completed with its result payload.
 func (s *Store) Succeed(id, result string) error {
 	_, err := s.db.Exec(
