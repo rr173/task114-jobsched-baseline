@@ -13,7 +13,10 @@ import (
 )
 
 // ErrNotFound is returned when a requested job does not exist.
-var ErrNotFound = errors.New("store: job not found")
+var (
+	ErrNotFound = errors.New("store: job not found")
+	ErrConflict = errors.New("store: job state conflict")
+)
 
 // Store is a SQLite-backed persistence layer for the scheduler.
 type Store struct {
@@ -365,16 +368,35 @@ func (s *Store) ListJobs(f ListFilter) ([]model.Job, error) {
 
 // DeleteJob removes a job and its attempts.
 func (s *Store) DeleteJob(id string) error {
-	if _, err := s.db.Exec(`DELETE FROM attempts WHERE job_id=?`, id); err != nil {
-		return fmt.Errorf("delete attempts: %w", err)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin delete job: %w", err)
 	}
-	res, err := s.db.Exec(`DELETE FROM jobs WHERE id=?`, id)
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM jobs WHERE id=? AND state != 'running'`, id)
 	if err != nil {
 		return fmt.Errorf("delete job: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete job rows: %w", err)
+	}
 	if n == 0 {
-		return ErrNotFound
+		var state string
+		err := tx.QueryRow(`SELECT state FROM jobs WHERE id=?`, id).Scan(&state)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lookup delete job: %w", err)
+		}
+		return ErrConflict
+	}
+	if _, err := tx.Exec(`DELETE FROM attempts WHERE job_id=?`, id); err != nil {
+		return fmt.Errorf("delete attempts: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete job: %w", err)
 	}
 	return nil
 }

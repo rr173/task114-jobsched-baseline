@@ -258,9 +258,26 @@ func (s *Server) deleteJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	job, err := s.store.GetJob(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if job.State == model.StateRunning {
+		writeError(w, http.StatusConflict, "running job cannot be deleted")
+		return
+	}
 	if err := s.store.DeleteJob(id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, "running job cannot be deleted")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
