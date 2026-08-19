@@ -308,12 +308,15 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	if j.State == model.StateRunning {
 		s.pool.Cancel(id)
 	}
-	j.State = model.StateCancelled
-	j.UpdatedAt = time.Now()
-	if err := s.store.UpdateJob(j); err != nil {
+	if err := s.store.Cancel(id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusConflict, "job state changed before cancellation")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	j.State = model.StateCancelled
 	writeJSON(w, http.StatusOK, j)
 }
 

@@ -238,11 +238,31 @@ func (s *Store) Claim(id string) (bool, error) {
 // Succeed marks a job completed with its result payload.
 func (s *Store) Succeed(id, result string) error {
 	_, err := s.db.Exec(
-		`UPDATE jobs SET state='succeeded', result=?, updated_at=? WHERE id=?`,
+		`UPDATE jobs SET state='succeeded', result=?, updated_at=? WHERE id=? AND state NOT IN ('cancelled','dead','succeeded')`,
 		result, time.Now().UnixNano(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("succeed job: %w", err)
+	}
+	return nil
+}
+
+// Cancel transitions a job to its terminal cancelled state. Completion paths
+// may only write jobs they still own in the running state.
+func (s *Store) Cancel(id string) error {
+	res, err := s.db.Exec(
+		`UPDATE jobs SET state='cancelled', updated_at=? WHERE id=? AND state IN ('pending','scheduled','running')`,
+		time.Now().UnixNano(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("cancel job: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("cancel job rows: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
