@@ -50,3 +50,11 @@ func (s *Schedule) IsDue(now time.Time) bool {
 	}
 	return !s.LastRun.Add(s.Interval).After(now)
 }
+
+// IsUnstarted distinguishes a newly-created schedule from one that has
+// already fired. SQLite stores a zero timestamp as the Unix epoch, so both
+// representations denote the same domain state.
+func (s Schedule) IsUnstarted() bool {
+	persistedZero := time.Unix(0, time.Time{}.UnixNano())
+	return s.LastRun.IsZero() || s.LastRun.Equal(time.Unix(0, 0)) || s.LastRun.Equal(persistedZero)
+}
