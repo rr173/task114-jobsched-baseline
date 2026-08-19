@@ -35,13 +35,3 @@ func RecoverInterrupted(s *store.Store, now time.Time) (RecoveryResult, error) {
 	}
 	return out, nil
 }
-
-func RecoveryDelay(age time.Duration) time.Duration {
-	if age < 0 {
-		return 0
-	}
-	if age > time.Hour {
-		return time.Hour
-	}
-	return age
-}
