@@ -152,6 +152,9 @@ func (s *Store) CreateJob(j *model.Job) error {
 	if j.RunAt.IsZero() {
 		j.RunAt = now
 	}
+	if err := j.Validate(); err != nil {
+		return fmt.Errorf("validate job: %w", err)
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO jobs(id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority)
 		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,

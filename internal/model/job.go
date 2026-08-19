@@ -2,6 +2,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -73,6 +74,9 @@ func (j *Job) Validate() error {
 	}
 	if j.Type == "" {
 		return fmt.Errorf("job type must not be empty")
+	}
+	if j.Args != "" && !json.Valid([]byte(j.Args)) {
+		return fmt.Errorf("job args must contain valid json")
 	}
 	if !ValidStates[j.State] {
 		return fmt.Errorf("invalid job state %q", j.State)
