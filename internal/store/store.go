@@ -180,8 +180,15 @@ func (s *Store) GetJob(id string) (*model.Job, error) {
 
 // UpdateJob persists mutable fields of an existing job.
 func (s *Store) UpdateJob(j *model.Job) error {
+	current, err := s.GetJob(j.ID)
+	if err != nil {
+		return err
+	}
+	if !model.CanTransition(current.State, j.State) {
+		return fmt.Errorf("update job: invalid state transition %q -> %q", current.State, j.State)
+	}
 	j.UpdatedAt = time.Now()
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`UPDATE jobs SET queue=?, type=?, args=?, state=?, run_at=?, updated_at=?, attempts=?, max_attempts=?, last_error=?, result=?, priority=? WHERE id=?`,
 		j.Queue, j.Type, j.Args, string(j.State),
 		j.RunAt.UnixNano(), j.UpdatedAt.UnixNano(),
