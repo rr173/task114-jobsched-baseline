@@ -489,6 +489,9 @@ func (s *Store) RequeueDead(id string) error {
 
 // CreateSchedule persists a recurring schedule.
 func (s *Store) CreateSchedule(sc *model.Schedule) error {
+	if err := sc.Validate(); err != nil {
+		return fmt.Errorf("validate schedule: %w", err)
+	}
 	now := time.Now()
 	if sc.CreatedAt.IsZero() {
 		sc.CreatedAt = now

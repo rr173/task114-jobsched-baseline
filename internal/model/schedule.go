@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -30,6 +31,9 @@ func (s *Schedule) Validate() error {
 	}
 	if s.Type == "" {
 		return fmt.Errorf("schedule type must not be empty")
+	}
+	if !json.Valid([]byte(s.Args)) {
+		return fmt.Errorf("schedule args must contain valid json")
 	}
 	if s.Interval <= 0 {
 		return fmt.Errorf("schedule interval must be positive")
