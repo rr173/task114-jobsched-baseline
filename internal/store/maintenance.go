@@ -23,7 +23,7 @@ func (s *Store) Maintenance(now time.Time) (MaintenanceReport, error) {
 	if err != nil {
 		return MaintenanceReport{}, err
 	}
-	oldest, err := s.OldestPending("")
+	oldest, err := s.OldestPending("", now)
 	if err != nil && err != ErrNotFound {
 		return MaintenanceReport{}, err
 	}

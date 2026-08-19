@@ -1,19 +1,29 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"task114-jobsched/internal/model"
 	"time"
 )
 
-func (s *Store) OldestPending(queue string) (*model.Job, error) {
-	rows, err := s.ListJobs(ListFilter{Queue: queue, State: model.StatePending, Limit: 1})
+func (s *Store) OldestPending(queue string, now time.Time) (*model.Job, error) {
+	q := `SELECT ` + jobColumns + ` FROM jobs WHERE (state='pending' OR (state='scheduled' AND run_at<=?))`
+	args := []interface{}{now.UnixNano()}
+	if queue != "" {
+		q += ` AND queue=?`
+		args = append(args, queue)
+	}
+	q += ` ORDER BY created_at ASC, id ASC LIMIT 1`
+	row := s.db.QueryRow(q, args...)
+	j, err := s.scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return nil, ErrNotFound
-	}
-	return &rows[0], nil
+	return j, nil
 }
 func (s *Store) DueCount(queue string, now time.Time) (int, error) {
 	rows, err := s.ScanDue(10000, now)
