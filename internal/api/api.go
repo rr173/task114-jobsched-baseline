@@ -167,6 +167,7 @@ func (s *Server) batchJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ids := make([]string, 0, len(req.Jobs))
+	jobs := make([]*model.Job, 0, len(req.Jobs))
 	for _, jr := range req.Jobs {
 		if jr.Queue == "" {
 			jr.Queue = "default"
@@ -202,11 +203,12 @@ func (s *Server) batchJobs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "job "+id+": "+err.Error())
 			return
 		}
-		if err := s.store.CreateJob(j); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
 		ids = append(ids, id)
+		jobs = append(jobs, j)
+	}
+	if err := s.store.CreateJobs(jobs); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"ids": ids, "count": len(ids)})
 }

@@ -165,6 +165,46 @@ func (s *Store) CreateJob(j *model.Job) error {
 	return nil
 }
 
+// CreateJobs inserts a validated batch as one durable unit. If any row cannot
+// be written, the transaction rolls back so callers never observe a partial
+// batch submission.
+func (s *Store) CreateJobs(jobs []*model.Job) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin batch insert: %w", err)
+	}
+	defer tx.Rollback()
+	for _, j := range jobs {
+		now := time.Now()
+		if j.CreatedAt.IsZero() {
+			j.CreatedAt = now
+		}
+		j.UpdatedAt = now
+		if j.MaxAttempts < 1 {
+			j.MaxAttempts = 1
+		}
+		if j.State == "" {
+			j.State = model.StatePending
+		}
+		if j.RunAt.IsZero() {
+			j.RunAt = now
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO jobs(id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			j.ID, j.Queue, j.Type, j.Args, string(j.State),
+			j.RunAt.UnixNano(), j.CreatedAt.UnixNano(), j.UpdatedAt.UnixNano(),
+			j.Attempts, j.MaxAttempts, j.LastError, j.Result, j.Priority,
+		); err != nil {
+			return fmt.Errorf("insert batch job: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch insert: %w", err)
+	}
+	return nil
+}
+
 // GetJob returns the job with the given id, or ErrNotFound.
 func (s *Store) GetJob(id string) (*model.Job, error) {
 	row := s.db.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE id=?`, id)
