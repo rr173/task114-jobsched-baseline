@@ -235,6 +235,30 @@ func (s *Store) Claim(id string) (bool, error) {
 	return n > 0, nil
 }
 
+// ReleaseClaim reverses a successful Claim when the job will not be dispatched
+// after all — for example because the dispatch context was cancelled while the
+// pool was blocked waiting for a free worker slot. The job returns to the
+// pending pool with run_at set to now so it is immediately eligible again. The
+// attempt counter is left untouched because the handler never ran, so this
+// cancellation does not consume one of the job's retries. It returns false when
+// the job is no longer in the running state (already finished or requeued
+// elsewhere), in which case there is nothing to release.
+func (s *Store) ReleaseClaim(id string) (bool, error) {
+	now := time.Now().UnixNano()
+	res, err := s.db.Exec(
+		`UPDATE jobs SET state='pending', run_at=?, updated_at=? WHERE id=? AND state='running'`,
+		now, now, id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("release claim: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("release rows: %w", err)
+	}
+	return n > 0, nil
+}
+
 // Succeed marks a job completed with its result payload.
 func (s *Store) Succeed(id, result string) error {
 	_, err := s.db.Exec(

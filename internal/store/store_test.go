@@ -118,6 +118,54 @@ func TestRequeueDead(t *testing.T) {
 	}
 }
 
+func TestReleaseClaim(t *testing.T) {
+	s := openTest(t)
+	j := newJob("j1", "q", "noop", time.Now())
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.Claim("j1")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected job to be claimed")
+	}
+	if before, _ := s.GetJob("j1"); before.State != model.StateRunning {
+		t.Fatalf("claim should move to running, got %s", before.State)
+	}
+	released, err := s.ReleaseClaim("j1")
+	if err != nil {
+		t.Fatalf("release claim: %v", err)
+	}
+	if !released {
+		t.Fatal("expected job to be released")
+	}
+	got, _ := s.GetJob("j1")
+	if got.State != model.StatePending {
+		t.Fatalf("release should move back to pending, got %s", got.State)
+	}
+	if got.Attempts != 0 {
+		t.Fatalf("release must not consume an attempt, got %d", got.Attempts)
+	}
+}
+
+func TestReleaseClaimNotRunning(t *testing.T) {
+	s := openTest(t)
+	j := newJob("j1", "q", "noop", time.Now())
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	// A pending job was never claimed, so releasing is a no-op.
+	released, err := s.ReleaseClaim("j1")
+	if err != nil {
+		t.Fatalf("release claim: %v", err)
+	}
+	if released {
+		t.Fatal("expected no release for a job that is not running")
+	}
+}
+
 func TestQueuePause(t *testing.T) {
 	s := openTest(t)
 	if err := s.SetPaused("q1", true); err != nil {

@@ -106,6 +106,13 @@ func (p *Pool) Flush(ctx context.Context) error {
 			p.mu.Lock()
 			delete(p.active, j.ID)
 			p.mu.Unlock()
+			// The job was already claimed (moved to running) but will never be
+			// dispatched because the dispatch context was cancelled while we
+			// waited for a worker slot. Return it to the pending pool so it is
+			// not stranded in the running state forever.
+			if _, rerr := p.store.ReleaseClaim(j.ID); rerr != nil {
+				return rerr
+			}
 			return ctx.Err()
 		}
 		p.wg.Add(1)
