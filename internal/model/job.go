@@ -2,6 +2,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -79,6 +80,22 @@ func (j *Job) Validate() error {
 	}
 	if j.MaxAttempts < 1 {
 		return fmt.Errorf("max attempts must be >= 1")
+	}
+	if err := validateArgs(j.Args); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateArgs reports whether args is empty or a valid JSON payload. It is
+// shared by Job and Schedule so both layers apply the same parameter check at
+// save time rather than letting malformed payloads surface only at execution.
+func validateArgs(args string) error {
+	if args == "" {
+		return nil
+	}
+	if !json.Valid([]byte(args)) {
+		return fmt.Errorf("args must be valid JSON")
 	}
 	return nil
 }

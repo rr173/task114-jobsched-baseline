@@ -487,8 +487,13 @@ func (s *Store) RequeueDead(id string) error {
 	return nil
 }
 
-// CreateSchedule persists a recurring schedule.
+// CreateSchedule persists a recurring schedule. It validates the schedule up
+// front so a malformed payload (e.g. invalid JSON args) is rejected at save
+// time instead of surfacing only when the schedule fires and enqueues a job.
 func (s *Store) CreateSchedule(sc *model.Schedule) error {
+	if err := sc.Validate(); err != nil {
+		return fmt.Errorf("validate schedule: %w", err)
+	}
 	now := time.Now()
 	if sc.CreatedAt.IsZero() {
 		sc.CreatedAt = now

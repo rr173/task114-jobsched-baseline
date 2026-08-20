@@ -37,6 +37,9 @@ func (s *Schedule) Validate() error {
 	if s.MaxAttempts < 1 {
 		s.MaxAttempts = 3
 	}
+	if err := validateArgs(s.Args); err != nil {
+		return err
+	}
 	return nil
 }
 
