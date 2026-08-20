@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -136,7 +137,11 @@ func (s *Store) scanJob(row interface {
 
 const jobColumns = `id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority`
 
-// CreateJob inserts a new job. The caller must have validated it.
+// CreateJob inserts a new job. Args must be a valid JSON payload; an empty
+// payload is normalised to "{}". The caller is otherwise expected to have
+// validated the job, but args are checked here so that non-HTTP entry points
+// (e.g. recurring schedules) cannot persist an unparseable payload that a
+// worker would only discover after claiming the job.
 func (s *Store) CreateJob(j *model.Job) error {
 	now := time.Now()
 	if j.CreatedAt.IsZero() {
@@ -151,6 +156,12 @@ func (s *Store) CreateJob(j *model.Job) error {
 	}
 	if j.RunAt.IsZero() {
 		j.RunAt = now
+	}
+	if j.Args == "" {
+		j.Args = "{}"
+	}
+	if !json.Valid([]byte(j.Args)) {
+		return fmt.Errorf("invalid job args: not valid JSON")
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO jobs(id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority)

@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +87,63 @@ func TestFlushSkipsFuture(t *testing.T) {
 	f, _ := s.GetJob("future")
 	if f.State != model.StateScheduled {
 		t.Fatalf("future job expected scheduled, got %s", f.State)
+	}
+}
+
+// TestFireDueSchedulesRejectsCorruptArgs covers the non-HTTP entry point
+// described by bug 07: a recurring schedule fires jobs via CreateJob directly,
+// bypassing the HTTP JSON decoder. A schedule whose args are not valid JSON
+// must not be able to persist a job — the worker would only discover the
+// unparseable payload after claiming it.
+func TestFireDueSchedulesRejectsCorruptArgs(t *testing.T) {
+	s, p := newPool(t)
+
+	bad := &model.Schedule{
+		ID:          "bad-sched",
+		Queue:       "q",
+		Type:        "noop",
+		Args:        `{"broken"`,
+		Interval:    time.Second,
+		Enabled:     true,
+		MaxAttempts: 3,
+	}
+	if err := s.CreateSchedule(bad); err != nil {
+		t.Fatalf("create bad schedule: %v", err)
+	}
+	// A valid schedule must still fire through the same path so the rejection
+	// does not silently break recurring scheduling.
+	good := &model.Schedule{
+		ID:          "good-sched",
+		Queue:       "q",
+		Type:        "noop",
+		Args:        `{"ok":true}`,
+		Interval:    time.Second,
+		Enabled:     true,
+		MaxAttempts: 3,
+	}
+	if err := s.CreateSchedule(good); err != nil {
+		t.Fatalf("create good schedule: %v", err)
+	}
+
+	p.fireDueSchedules(context.Background())
+
+	jobs, err := s.ListJobs(store.ListFilter{})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	var goodFired bool
+	for _, j := range jobs {
+		if strings.HasPrefix(j.ID, "sched-bad-sched-") {
+			t.Errorf("corrupt-args schedule persisted a job: %s args=%q", j.ID, j.Args)
+		}
+		if !json.Valid([]byte(j.Args)) {
+			t.Errorf("job %s has invalid JSON args: %q", j.ID, j.Args)
+		}
+		if strings.HasPrefix(j.ID, "sched-good-sched-") {
+			goodFired = true
+		}
+	}
+	if !goodFired {
+		t.Fatal("valid schedule did not fire; rejection must not break the happy path")
 	}
 }
