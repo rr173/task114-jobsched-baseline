@@ -82,6 +82,39 @@ func TestSucceed(t *testing.T) {
 	}
 }
 
+// TestSucceedAndFailDoNotOverwriteTerminal guards the cancel/complete race: a
+// late completion (or retry) arriving after the job reached a terminal state
+// must be discarded, not written back over the terminal outcome.
+func TestSucceedAndFailDoNotOverwriteTerminal(t *testing.T) {
+	for _, terminal := range []model.State{model.StateCancelled, model.StateDead, model.StateSucceeded} {
+		s := openTest(t)
+		j := newJob("j1", "q", "noop", time.Now())
+		j.State = terminal
+		j.Attempts = 1
+		if err := s.CreateJob(j); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := s.Succeed("j1", "late success"); err != nil {
+			t.Fatalf("Succeed(%s): %v", terminal, err)
+		}
+		if err := s.Fail("j1", "late failure", true, time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("Fail(%s, retry): %v", terminal, err)
+		}
+		if err := s.Fail("j1", "late failure", false, time.Time{}); err != nil {
+			t.Fatalf("Fail(%s, dead): %v", terminal, err)
+		}
+
+		got, _ := s.GetJob("j1")
+		if got.State != terminal {
+			t.Fatalf("terminal %s overwritten by late completion: got %s", terminal, got.State)
+		}
+		if got.Attempts != 1 {
+			t.Fatalf("terminal %s attempt counter mutated by late failure: got %d", terminal, got.Attempts)
+		}
+	}
+}
+
 func TestRecordAttempts(t *testing.T) {
 	s := openTest(t)
 	j := newJob("j1", "q", "noop", time.Now())

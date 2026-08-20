@@ -235,10 +235,15 @@ func (s *Store) Claim(id string) (bool, error) {
 	return n > 0, nil
 }
 
-// Succeed marks a job completed with its result payload.
+// Succeed marks a job completed with its result payload. It is a no-op when the
+// job has already reached a terminal state (cancelled, dead, or succeeded) so
+// that a late completion arriving from a worker cannot overwrite an
+// operator-initiated cancellation or any other terminal outcome. The check and
+// the write run in one statement, which keeps the store as the single writer
+// and avoids a check-then-act race.
 func (s *Store) Succeed(id, result string) error {
 	_, err := s.db.Exec(
-		`UPDATE jobs SET state='succeeded', result=?, updated_at=? WHERE id=?`,
+		`UPDATE jobs SET state='succeeded', result=?, updated_at=? WHERE id=? AND state NOT IN ('cancelled','dead','succeeded')`,
 		result, time.Now().UnixNano(), id,
 	)
 	if err != nil {
@@ -249,12 +254,15 @@ func (s *Store) Succeed(id, result string) error {
 
 // Fail records a failed attempt. When willRetry is true the job returns to the
 // pending pool with run_at set to nextRunAt; otherwise it becomes a dead
-// letter. Either way the attempt counter is incremented.
+// letter. Either way the attempt counter is incremented. A late failure is a
+// no-op when the job has already reached a terminal state, so it cannot
+// resurrect a cancelled job back to pending nor overwrite another terminal
+// outcome.
 func (s *Store) Fail(id, errMsg string, willRetry bool, nextRunAt time.Time) error {
 	now := time.Now().UnixNano()
 	if willRetry {
 		_, err := s.db.Exec(
-			`UPDATE jobs SET state='pending', attempts=attempts+1, last_error=?, run_at=?, updated_at=? WHERE id=?`,
+			`UPDATE jobs SET state='pending', attempts=attempts+1, last_error=?, run_at=?, updated_at=? WHERE id=? AND state NOT IN ('cancelled','dead','succeeded')`,
 			errMsg, nextRunAt.UnixNano(), now, id,
 		)
 		if err != nil {
@@ -263,7 +271,7 @@ func (s *Store) Fail(id, errMsg string, willRetry bool, nextRunAt time.Time) err
 		return nil
 	}
 	_, err := s.db.Exec(
-		`UPDATE jobs SET state='dead', attempts=attempts+1, last_error=?, updated_at=? WHERE id=?`,
+		`UPDATE jobs SET state='dead', attempts=attempts+1, last_error=?, updated_at=? WHERE id=? AND state NOT IN ('cancelled','dead','succeeded')`,
 		errMsg, now, id,
 	)
 	if err != nil {
