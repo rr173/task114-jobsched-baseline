@@ -263,6 +263,10 @@ func (s *Server) deleteJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
 		}
+		if errors.Is(err, store.ErrJobRunning) {
+			writeError(w, http.StatusConflict, "job is running")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -448,6 +452,10 @@ func (s *Server) deleteDead(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteJob(id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		if errors.Is(err, store.ErrJobRunning) {
+			writeError(w, http.StatusConflict, "job is running")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())

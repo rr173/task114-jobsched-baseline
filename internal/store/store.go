@@ -15,6 +15,12 @@ import (
 // ErrNotFound is returned when a requested job does not exist.
 var ErrNotFound = errors.New("store: job not found")
 
+// ErrJobRunning is returned when an operation cannot proceed because the job
+// is currently being executed by a worker. Deletion is refused in this state
+// so the worker's eventual completion cannot write onto a row that is
+// already gone, which would leave an incomplete lifecycle record.
+var ErrJobRunning = errors.New("store: job is running")
+
 // Store is a SQLite-backed persistence layer for the scheduler.
 type Store struct {
 	db *sql.DB
@@ -363,18 +369,47 @@ func (s *Store) ListJobs(f ListFilter) ([]model.Job, error) {
 	return all[offset:end], nil
 }
 
-// DeleteJob removes a job and its attempts.
+// DeleteJob removes a job and its attempts. A job that is currently running
+// cannot be deleted: the executing worker may still write its completion
+// result, and removing the row first would leave an orphaned attempt and an
+// incomplete lifecycle record. Such requests return ErrJobRunning so callers
+// can surface a conflict; the job and its history are left untouched.
 func (s *Store) DeleteJob(id string) error {
-	if _, err := s.db.Exec(`DELETE FROM attempts WHERE job_id=?`, id); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete job: %w", err)
+	}
+	defer tx.Rollback()
+
+	var state string
+	err = tx.QueryRow(`SELECT state FROM jobs WHERE id=?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("delete job: %w", err)
+	}
+	if model.State(state) == model.StateRunning {
+		return ErrJobRunning
+	}
+
+	if _, err := tx.Exec(`DELETE FROM attempts WHERE job_id=?`, id); err != nil {
 		return fmt.Errorf("delete attempts: %w", err)
 	}
-	res, err := s.db.Exec(`DELETE FROM jobs WHERE id=?`, id)
+	// Guard the state again inside the delete. The store serves a single
+	// connection, so the SELECT above already serializes against concurrent
+	// claims, but the condition keeps the invariant explicit and safe against
+	// any future change to connection pooling.
+	res, err := tx.Exec(`DELETE FROM jobs WHERE id=? AND state<>?`, id, string(model.StateRunning))
 	if err != nil {
 		return fmt.Errorf("delete job: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return ErrNotFound
+		return ErrJobRunning
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete job: %w", err)
 	}
 	return nil
 }
