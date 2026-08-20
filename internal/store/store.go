@@ -165,6 +165,47 @@ func (s *Store) CreateJob(j *model.Job) error {
 	return nil
 }
 
+// CreateScheduleRun enqueues a recurring schedule's run for the given runAt as
+// a job. The job id is derived from the schedule id and runAt so that the same
+// run is only ever enqueued once: if a record for that run already exists the
+// call is a no-op and created is false. This lets the scheduler advance its
+// cursor past an already-enqueued run instead of stalling on it. It returns
+// created=true when a new job row was actually inserted.
+func (s *Store) CreateScheduleRun(sc *model.Schedule, runAt time.Time) (j *model.Job, created bool, err error) {
+	now := time.Now()
+	j = &model.Job{
+		ID:          fmt.Sprintf("sched-%s-%d", sc.ID, runAt.UnixNano()),
+		Queue:       sc.Queue,
+		Type:        sc.Type,
+		Args:        sc.Args,
+		State:       model.StatePending,
+		RunAt:       runAt,
+		MaxAttempts: sc.MaxAttempts,
+		Priority:    sc.Priority,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if j.MaxAttempts < 1 {
+		j.MaxAttempts = 1
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO jobs(id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO NOTHING`,
+		j.ID, j.Queue, j.Type, j.Args, string(j.State),
+		j.RunAt.UnixNano(), j.CreatedAt.UnixNano(), j.UpdatedAt.UnixNano(),
+		j.Attempts, j.MaxAttempts, j.LastError, j.Result, j.Priority,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("insert schedule run: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, false, fmt.Errorf("insert schedule run rows: %w", err)
+	}
+	return j, n > 0, nil
+}
+
 // GetJob returns the job with the given id, or ErrNotFound.
 func (s *Store) GetJob(id string) (*model.Job, error) {
 	row := s.db.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE id=?`, id)

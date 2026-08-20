@@ -226,20 +226,18 @@ func (p *Pool) fireDueSchedules(ctx context.Context) {
 		}
 		runAt := sc.NextRun(p.clk.Now())
 		for i := 0; i < runs; i++ {
-			j := &model.Job{
-				ID:          fmt.Sprintf("sched-%s-%d", sc.ID, runAt.UnixNano()),
-				Queue:       sc.Queue,
-				Type:        sc.Type,
-				Args:        sc.Args,
-				State:       model.StatePending,
-				RunAt:       runAt,
-				MaxAttempts: sc.MaxAttempts,
-				Priority:    sc.Priority,
-			}
-			if err := p.store.CreateJob(j); err != nil {
+			// Enqueue this run idempotently. A run whose record already exists
+			// (after a restart or a duplicate tick) must still advance the
+			// cursor, otherwise the schedule would re-fire the same instant
+			// forever. TouchSchedule is therefore unconditional: whether or not
+			// we inserted a fresh job, the cursor moves past runAt.
+			_, created, cerr := p.store.CreateScheduleRun(&sc, runAt)
+			if cerr != nil {
 				break
 			}
-			p.metrics.IncEnqueued()
+			if created {
+				p.metrics.IncEnqueued()
+			}
 			_ = p.store.TouchSchedule(sc.ID, runAt)
 			runAt = runAt.Add(sc.Interval)
 		}
