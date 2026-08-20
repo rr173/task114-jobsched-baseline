@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"task114-jobsched/internal/clock"
 	"task114-jobsched/internal/model"
@@ -108,5 +109,44 @@ func TestFlushEndpoint(t *testing.T) {
 	rec := do(t, h, "POST", "/flush", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("flush code %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRetryDeadJob confirms retrying a dead job reopens it to pending via the
+// explicit recovery path, even though the generic UpdateJob now guards terminal
+// states.
+func TestRetryDeadJob(t *testing.T) {
+	s, _, h := newServer(t)
+	j := &model.Job{ID: "d1", Queue: "q", Type: "noop", Args: "{}", State: model.StatePending, RunAt: time.Now(), MaxAttempts: 1}
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Fail("d1", "boom", false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, h, "POST", "/jobs/d1/retry", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry code %d body %s", rec.Code, rec.Body.String())
+	}
+	got, _ := s.GetJob("d1")
+	if got.State != model.StatePending {
+		t.Fatalf("retry should reopen dead job to pending, got %q", got.State)
+	}
+}
+
+// TestCancelJob exercises the pending -> cancelled transition through the API.
+func TestCancelJob(t *testing.T) {
+	s, _, h := newServer(t)
+	j := &model.Job{ID: "c1", Queue: "q", Type: "noop", Args: "{}", State: model.StatePending, RunAt: time.Now(), MaxAttempts: 1}
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, h, "POST", "/jobs/c1/cancel", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel code %d body %s", rec.Code, rec.Body.String())
+	}
+	got, _ := s.GetJob("c1")
+	if got.State != model.StateCancelled {
+		t.Fatalf("expected cancelled, got %q", got.State)
 	}
 }

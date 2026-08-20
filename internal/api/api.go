@@ -284,10 +284,26 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "job cannot be retried from state "+string(j.State))
 		return
 	}
-	j.State = model.StatePending
-	j.RunAt = time.Now()
-	j.LastError = ""
-	if err := s.store.UpdateJob(j); err != nil {
+	// A dead job is terminal: the generic UpdateJob path refuses to reopen it.
+	// Route it through the explicit dead-letter requeue so retry remains a
+	// deliberate recovery action instead of a terminal-state rollback. Non-
+	// terminal states still go through UpdateJob.
+	if j.State == model.StateDead {
+		if err := s.store.RequeueDead(id); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else {
+		j.State = model.StatePending
+		j.RunAt = time.Now()
+		j.LastError = ""
+		if err := s.store.UpdateJob(j); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	j, err = s.store.GetJob(id)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

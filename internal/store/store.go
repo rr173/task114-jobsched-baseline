@@ -15,6 +15,13 @@ import (
 // ErrNotFound is returned when a requested job does not exist.
 var ErrNotFound = errors.New("store: job not found")
 
+// ErrTerminalState is returned when a generic update targets a job that has
+// already reached a terminal state (succeeded, dead or cancelled). Terminal
+// jobs are frozen for the generic update flow so a routine save can never roll
+// a finished job back into the scheduling pool. Deliberate recovery actions
+// (retry, requeue) use dedicated guarded methods instead.
+var ErrTerminalState = errors.New("store: job is in a terminal state")
+
 // Store is a SQLite-backed persistence layer for the scheduler.
 type Store struct {
 	db *sql.DB
@@ -178,10 +185,21 @@ func (s *Store) GetJob(id string) (*model.Job, error) {
 	return j, nil
 }
 
-// UpdateJob persists mutable fields of an existing job.
+// UpdateJob persists mutable fields of an existing job. It refuses to touch a
+// job that has already reached a terminal state (succeeded, dead, cancelled),
+// so the generic update flow can never roll a finished job back into the
+// scheduling pool. Explicit recovery actions (retry, requeue) use dedicated
+// guarded methods such as RequeueDead instead.
 func (s *Store) UpdateJob(j *model.Job) error {
+	current, err := s.GetJob(j.ID)
+	if err != nil {
+		return err
+	}
+	if current.IsTerminal() {
+		return fmt.Errorf("%w: %q is %q", ErrTerminalState, j.ID, current.State)
+	}
 	j.UpdatedAt = time.Now()
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`UPDATE jobs SET queue=?, type=?, args=?, state=?, run_at=?, updated_at=?, attempts=?, max_attempts=?, last_error=?, result=?, priority=? WHERE id=?`,
 		j.Queue, j.Type, j.Args, string(j.State),
 		j.RunAt.UnixNano(), j.UpdatedAt.UnixNano(),
