@@ -497,13 +497,25 @@ func (s *Store) CreateSchedule(sc *model.Schedule) error {
 		`INSERT INTO schedules(id, queue, type, args, interval_ms, enabled, last_run, max_attempts, priority, created_at)
 		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		sc.ID, sc.Queue, sc.Type, sc.Args,
-		sc.Interval.Milliseconds(), boolToInt(sc.Enabled), sc.LastRun.UnixNano(),
+		sc.Interval.Milliseconds(), boolToInt(sc.Enabled), scheduleLastRunNanos(sc.LastRun),
 		sc.MaxAttempts, sc.Priority, sc.CreatedAt.UnixNano(),
 	)
 	if err != nil {
 		return fmt.Errorf("insert schedule: %w", err)
 	}
 	return nil
+}
+
+// scheduleLastRunNanos serialises a schedule's LastRun for the last_run column.
+// A schedule that has never fired must round-trip back as "never fired" so the
+// scheduler can tell a first fire apart from a genuinely backlogged schedule.
+// time.Time{}.UnixNano() returns a large negative number, so the zero time is
+// persisted as 0 instead and reconstructed as the zero time on read.
+func scheduleLastRunNanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }
 
 // GetSchedule returns a schedule by id, or ErrNotFound.
@@ -540,9 +552,19 @@ func (s *Store) scanSchedule(row interface {
 	sc.Args = args
 	sc.Interval = time.Duration(intervalMs) * time.Millisecond
 	sc.Enabled = enabled != 0
-	sc.LastRun = time.Unix(0, lastRun)
+	sc.LastRun = scheduleLastRunFromNanos(lastRun)
 	sc.CreatedAt = time.Unix(0, createdAt)
 	return sc, nil
+}
+
+// scheduleLastRunFromNanos is the read-side companion to scheduleLastRunNanos:
+// a stored 0 means the schedule has never fired, which is reconstructed as the
+// zero time so IsZero() stays true across a persistence round-trip.
+func scheduleLastRunFromNanos(nanos int64) time.Time {
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
 }
 
 // ListSchedules returns all schedules ordered by id.

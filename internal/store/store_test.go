@@ -167,3 +167,46 @@ func TestStats(t *testing.T) {
 		t.Fatalf("expected total 3, got %d", st.Total)
 	}
 }
+
+// TestScheduleNeverFiredRoundTripsAsZero guards the root cause of bug 05: a
+// schedule that has never fired must survive a persistence round-trip as a
+// zero LastRun so the worker can tell it apart from a schedule that is
+// genuinely backlogged. Storing the zero time's UnixNano (a large negative
+// number) instead made a first fire look like centuries of missed periods.
+func TestScheduleNeverFiredRoundTripsAsZero(t *testing.T) {
+	s := openTest(t)
+	sc := &model.Schedule{
+		ID:          "never-fired",
+		Queue:       "q",
+		Type:        "noop",
+		Args:        "{}",
+		Interval:    time.Minute,
+		Enabled:     true,
+		MaxAttempts: 1,
+	}
+	if err := s.CreateSchedule(sc); err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	got, err := s.GetSchedule("never-fired")
+	if err != nil {
+		t.Fatalf("get schedule: %v", err)
+	}
+	if !got.LastRun.IsZero() {
+		t.Fatalf("never-fired schedule LastRun should be zero, got %s", got.LastRun)
+	}
+	// It must still be reported as due so the first fire actually happens.
+	due, err := s.DueSchedules(time.Now())
+	if err != nil {
+		t.Fatalf("due schedules: %v", err)
+	}
+	var found bool
+	for _, d := range due {
+		if d.ID == "never-fired" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("never-fired schedule should be returned as due")
+	}
+}

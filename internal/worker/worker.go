@@ -217,6 +217,13 @@ func (p *Pool) fireDueSchedules(ctx context.Context) {
 			return
 		default:
 		}
+		// A schedule fires differently depending on whether it has ever run:
+		//   - first fire (LastRun is zero, see model.MissedRuns/NextRun): produce
+		//     exactly the current period, never a burst of backdated periods that
+		//     elapsed before the schedule ever ran;
+		//   - genuinely backlogged (LastRun set, several periods skipped while no
+		//     job was created): backfill each missed period so consumers see every
+		//     catch-up tick, capped so a long outage cannot flood the queue.
 		runs := sc.MissedRuns(p.clk.Now())
 		if runs < 1 {
 			runs = 1
