@@ -166,6 +166,9 @@ func (s *Server) batchJobs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	// Build and validate every job first, before any write. A bad request or a
+	// write failure must leave zero persisted jobs — the batch is all-or-nothing.
+	jobs := make([]*model.Job, 0, len(req.Jobs))
 	ids := make([]string, 0, len(req.Jobs))
 	for _, jr := range req.Jobs {
 		if jr.Queue == "" {
@@ -202,11 +205,12 @@ func (s *Server) batchJobs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "job "+id+": "+err.Error())
 			return
 		}
-		if err := s.store.CreateJob(j); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		jobs = append(jobs, j)
 		ids = append(ids, id)
+	}
+	if err := s.store.CreateJobs(jobs); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"ids": ids, "count": len(ids)})
 }

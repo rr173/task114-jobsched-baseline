@@ -165,6 +165,49 @@ func (s *Store) CreateJob(j *model.Job) error {
 	return nil
 }
 
+// CreateJobs inserts all jobs in a single transaction. If any insert fails the
+// whole batch is rolled back, so a failed batch leaves no partial jobs behind.
+// The caller must have validated every job.
+func (s *Store) CreateJobs(jobs []*model.Job) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	// Rolling back after a successful Commit is a safe no-op (returns
+	// sql.ErrTxDone), so this deferred rollback handles every failure path.
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now()
+	const insertJob = `INSERT INTO jobs(id,queue,type,args,state,run_at,created_at,updated_at,attempts,max_attempts,last_error,result,priority)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	for _, j := range jobs {
+		if j.CreatedAt.IsZero() {
+			j.CreatedAt = now
+		}
+		j.UpdatedAt = now
+		if j.MaxAttempts < 1 {
+			j.MaxAttempts = 1
+		}
+		if j.State == "" {
+			j.State = model.StatePending
+		}
+		if j.RunAt.IsZero() {
+			j.RunAt = now
+		}
+		if _, err := tx.Exec(
+			insertJob,
+			j.ID, j.Queue, j.Type, j.Args, string(j.State),
+			j.RunAt.UnixNano(), j.CreatedAt.UnixNano(), j.UpdatedAt.UnixNano(),
+			j.Attempts, j.MaxAttempts, j.LastError, j.Result, j.Priority,
+		); err != nil {
+			return fmt.Errorf("insert job %s: %w", j.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch: %w", err)
+	}
+	return nil
+}
+
 // GetJob returns the job with the given id, or ErrNotFound.
 func (s *Store) GetJob(id string) (*model.Job, error) {
 	row := s.db.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE id=?`, id)
